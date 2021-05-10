@@ -32,7 +32,7 @@ def dummy_index():
     if request.method not in {"GET"}:
         abort(405, "Request method is not supported")
     else:
-        return redirect("https://dgp.dev/#")
+        return redirect("https://localhost:443/)
 
 @app.route("/<uri>", methods=["POST", "GET", "PUT", "DELETE", "PATCH"])
 def index(uri):
@@ -43,6 +43,6 @@ def index(uri):
             return bot.run()
 
 if __name__ == "__main__":
-    app.run(host=config["lapi_host"],
-        port=config["lapi_port"],
-        debug=False)
+    app.run(host=config["api_host"],
+        port=config["api_port"],
+        debug=True)
