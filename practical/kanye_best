@@ -1,0 +1,6 @@
+#!/bin/bash
+
+while true; do
+    sleep 60 && cat $HOME/bin/.kanye_best.txt
+done
+    

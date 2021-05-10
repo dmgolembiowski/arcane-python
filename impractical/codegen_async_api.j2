@@ -1,0 +1,177 @@
+#!/usr/bin/env python3
+"""
+Quart class-based API template
+utilizing Jinja2 markup to re-render the source file
+when the `pd.DataFrame` and `renderConf_<...>.json`
+files changed.
+
+In this amateurish architecture, the DataFrame
+replaced the traditional Python module. It held metadata and API directives
+for creating a single python web server script.
+"""
+from quart_openapi import Pint, Resource
+from quart import jsonify, request, redirect, abort
+from urllib.parse import urlparse
+import attr
+import asyncio
+from api import Api
+from hypercorn.config import Config
+from inspect import iscoroutinefunction
+import json
+import sys
+import requests
+
+'''
+Load a configuration file specific
+to the application server to be generated.
+'''
+
+with open("renderConf_{{ endpoints.app_server }}.json", "r") as f:
+    tconf = json.load(f)
+
+
+try:
+
+    # We do not want to run the server if the database
+    # is not already up and running
+
+    testService = requests.get(tconf["database_test_url"])
+    assert testService.status_code == 200
+    
+except Exception as e:
+    print(e)
+    print("You must restart the database query server. Exiting...")
+    sys.exit(1)
+
+config = Config()
+config.bind = ["{{ endpoints.api_host }}:{{ endpoints.api_port }}"]
+global api
+
+# `Api.pickle` was a hot-reloaded API file which made it
+# convenient to quickly modify source code without creating
+# true Python modules.
+
+api = Api.open("Api.pickle")
+app = Pint(__name__)
+
+@attr.s
+class Request:
+    data     = attr.ib(default=False)
+    size     = attr.ib(default=False)
+    response = attr.ib(default=False, init=False)
+
+{% for endpoint in endpoints.elements %}
+@app.route('{{ endpoint.route }}', methods=['POST', 'GET'])
+class {{ endpoint.ClassName }}(Resource):
+    """class {{ endpoint.ClassName }}(quart_openapi.Resource):
+
+    Name: {{ endpoint.methodName }}
+    Description: {{ endpoint.description }}
+    Route: {{ endpoint.route }}
+    Kwargs: {{ endpoint.kwargs }}
+    URL: {{ endpoint.url }}
+    File: {{ endpoint.file }}
+
+    This docstring was generated on {{ endpoints.date }}.
+    """
+    async def get(self):
+        req = Request({}, {})
+        async def handle_req(req):
+            aioEvent = asyncio.Event()
+            async def extend(r, event):
+                while not event.is_set():
+                    await asyncio.sleep(30)
+            async def mainTask(r):
+                r.data = {
+                    "kwargs": {k:v for k,v in request.args.items()},
+                    "url": request.url,
+                    "headers": {
+                        k:request.headers[k] for k,_ in request.headers.items()
+                    },
+                    "method": urlparse(request.url).path[8:]
+                }
+                r.response = await api["{{ endpoint.methodName }}"](r.data) 
+            async def oversee_event(r, event):
+                await event.wait()
+                await asyncio.sleep(30)
+
+            # In practice this was a very slow way to do it and
+            # should have used the `Future`'s approach
+            asyncio.create_task(extend(req, aioEvent))
+            asyncio.create_task(oversee_event(req, aioEvent))
+            await asyncio.gather(mainTask(req))
+            aioEvent.set()
+
+            # This line is unreachable unless `aioEvent.set()` did not
+            # perform a dynamic dispatch.
+            return abort(404)
+
+        return await handle_req(req)
+
+    async def post(self):
+        req = Request({}, {})
+        async def handle_req(req):
+            aioEvent = asyncio.Event()
+
+            # Coroutine was needed to keep things in motion
+            async def extend(r, event):
+                while not event.is_set():
+                    await asyncio.sleep(0.0001)
+
+            async def mainTask(r): 
+                if request.headers['Content-Type'] == 'text/plain':
+                    r.data, r.response = ({
+                            "kwargs": {},
+                            "url": "",
+                            "headers": {},
+                            "method": ""
+                            }, "{}")
+
+                elif request.headers['Content-Type'] == 'application/json':
+                    # Object of type `coroutine` is not JSON serializable
+                    r.data = {
+                        "kwargs": await request.get_json(),
+                        "url": request.url,
+                        "headers": {
+                            k:request.headers[k] for k,_ in request.headers.items()
+                        },
+                        "method": urlparse(request.url).path[8:]
+                    }
+                elif request.headers['Content-Type'] == 'application/octet-stream':
+                    r.data = "415 Unsupported Content-Type"
+                else:
+                    r.data = "415 Unsupported Media Type"
+                    
+            async def secondTask(r, firstEvent):
+                while not firstEvent.is_set():
+                    await asyncio.sleep(0.00001) 
+                    
+            async def oversee_event(r, event):
+                await event.wait()
+                await asyncio.sleep(0.00001)
+                
+            asyncio.create_task(extend(req, aioEvent))
+            asyncio.create_task(oversee_event(req, aioEvent))
+            
+            await asyncio.gather(mainTask(req))
+            aioEvent.set()
+
+            # I believe these next calls were either redundant or incorrect,
+            # but they did work for conditional case handling
+            secondEvent = asyncio.Event()
+            asyncio.create_task(extend(req, secondEvent))
+            asyncio.create_task(oversee_event(req, secondEvent))
+            await asyncio.gather(secondTask(req, aioEvent))
+            secondEvent.set() 
+            
+            req.response = await api.{{ endpoint.methodName }}(req.data)
+            return jsonify(req.response)
+        return await handle_req(req)
+
+{% endfor %}
+import uvloop
+from hypercorn.asyncio import serve
+asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
+loop.run_until_complete(serve(app, config))
